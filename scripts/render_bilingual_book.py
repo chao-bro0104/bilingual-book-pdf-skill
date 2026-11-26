@@ -20,8 +20,11 @@ PAGE_SPECS = {
         "gutter_mm": 21.0,
         "outer_mm": 15.0,
         "body_h_mm": 155.0,
-        "en_pt": 9.35,
+        "en_pt": 9.5,
         "zh_pt": 9.75,
+        "en_lh_base": 1.64,
+        "en_lh_max": 1.86,
+        "en_pb_mm": 2.65,
     },
     "b5": {
         "w_mm": 176.0,
@@ -31,8 +34,11 @@ PAGE_SPECS = {
         "gutter_mm": 23.0,
         "outer_mm": 17.0,
         "body_h_mm": 188.0,
-        "en_pt": 10.0,
+        "en_pt": 10.15,
         "zh_pt": 10.4,
+        "en_lh_base": 1.64,
+        "en_lh_max": 1.86,
+        "en_pb_mm": 2.85,
     },
 }
 
@@ -160,10 +166,12 @@ html, body {{
 .page-odd .running-footer {{ justify-content: flex-end; }}
 
 .col-en {{
+  --en-lh: {spec['en_lh_base']};
+  --en-pb: {spec['en_pb_mm']}mm;
   width: {col_w}mm;
   font-family: 'Charter', 'Iowan Old Style', 'Georgia', serif;
   font-size: {en_pt}pt;
-  line-height: 1.56;
+  line-height: var(--en-lh);
   color: #1c1e21;
   text-align: justify;
   hyphens: auto;
@@ -286,6 +294,7 @@ html, body {{
 }}
 
 .blk-para {{ margin-bottom: 2.6mm; }}
+.col-en .blk-para {{ margin-bottom: var(--en-pb); }}
 .blk-bullet {{
   position: relative;
   padding-left: 4.5mm;
@@ -369,8 +378,8 @@ html, body {{
   border-left: 1.6pt solid #2c3e50;
   font-family: 'Charter', Georgia, serif;
   font-style: italic;
-  font-size: {en_pt + 0.35}pt;
-  line-height: 1.5;
+  font-size: {en_pt + 0.2}pt;
+  line-height: calc(var(--en-lh) - 0.06);
   color: #0f172a;
   text-align: left;
 }}
@@ -779,7 +788,7 @@ def paginate_section(
     en_heights: list[dict],
     zh_heights: list[dict],
     max_h: float,
-) -> list[list[int]]:
+) -> list[dict]:
     n = len(blocks)
     groups: list[list[int]] = []
     i = 0
@@ -792,7 +801,7 @@ def paginate_section(
         groups.append(grp)
         i += 1
 
-    limit = max_h - 12.0
+    limit = max_h - 14.0
 
     def sim_h(indices: list[int], heights: list[dict]) -> float:
         if not indices:
@@ -805,17 +814,25 @@ def paginate_section(
             prev_mb = item["mb"]
         return total
 
-    spreads: list[list[int]] = []
+    spreads: list[dict] = []
     curr: list[int] = []
     for grp in groups:
         cand = curr + grp
         if curr and (sim_h(cand, en_heights) > limit or sim_h(cand, zh_heights) > limit):
-            spreads.append(curr)
+            spreads.append({
+                "indices": curr,
+                "en_h": sim_h(curr, en_heights),
+                "zh_h": sim_h(curr, zh_heights),
+            })
             curr = list(grp)
         else:
             curr = cand
     if curr:
-        spreads.append(curr)
+        spreads.append({
+            "indices": curr,
+            "en_h": sim_h(curr, en_heights),
+            "zh_h": sim_h(curr, zh_heights),
+        })
     return spreads
 
 
@@ -978,7 +995,14 @@ def paginate_and_render_toc(
     return pages_html, toc_pages_count
 
 
-def render_section_pages(sec: dict, spreads: list[list[int]] | None, start_page_num: int) -> list[str]:
+def render_section_pages(
+    sec: dict,
+    spreads: list[dict] | None,
+    start_page_num: int,
+    spec: dict,
+    max_h: float,
+    boost_log: list[tuple[int, float, float, float]] | None = None,
+) -> list[str]:
     pages_html: list[str] = []
     pg = start_page_num
     kind = sec.get("kind")
@@ -1030,13 +1054,32 @@ def render_section_pages(sec: dict, spreads: list[list[int]] | None, start_page_
         return pages_html
 
     blocks = sec["blocks"]
-    for sp_idxs in spreads:
+    base_lh = spec["en_lh_base"]
+    max_lh = spec["en_lh_max"]
+    base_pb = spec["en_pb_mm"]
+
+    for sp in spreads:
+        sp_idxs = sp["indices"]
+        en_h = sp["en_h"]
+        zh_h = sp["zh_h"]
+        en_style = ""
+        if zh_h - en_h > 16.0 and en_h > 120.0:
+            max_ratio_by_lh = max_lh / base_lh
+            max_ratio_by_box = max(1.0, (max_h - 16.0) / en_h)
+            ratio = min(zh_h / en_h, max_ratio_by_lh, max_ratio_by_box)
+            if ratio > 1.015:
+                adj_lh = round(base_lh * ratio, 3)
+                adj_pb = round(base_pb * (1.0 + (ratio - 1.0) * 0.75), 2)
+                en_style = f' style="--en-lh: {adj_lh}; --en-pb: {adj_pb}mm;"'
+                if boost_log is not None:
+                    boost_log.append((pg, en_h, zh_h, adj_lh))
+
         en_in = "\n".join(render_block_html(blocks[i], "en") for i in sp_idxs)
         zh_in = "\n".join(render_block_html(blocks[i], "zh") for i in sp_idxs)
         pages_html.append(f"""
 <section class="page page-even">
   <div class="running-header"><span class="hdr-main">{html.escape(sec['hdr_en_main'])}</span><span class="hdr-sub">{html.escape(sec['hdr_en_sub'])}</span></div>
-  <div class="page-body col-en">{en_in}</div>
+  <div class="page-body col-en"{en_style}>{en_in}</div>
   <div class="running-footer"><span>{pg}</span></div>
 </section>""")
         pg += 1
@@ -1166,9 +1209,10 @@ def main() -> None:
         batches: list[tuple[str, list[str]]] = [("00_front", [title_html] + toc_pages)]
         curr_pages: list[str] = []
         b_idx = 1
+        boost_log: list[tuple[int, float, float, float]] = []
         for sec in sections:
             sp = section_spreads.get(sec["id"])
-            sec_pages = render_section_pages(sec, sp, sec["start_page"])
+            sec_pages = render_section_pages(sec, sp, sec["start_page"], spec, max_h, boost_log)
             if curr_pages and len(curr_pages) + len(sec_pages) > 80:
                 batches.append((f"{b_idx:02d}_body", curr_pages))
                 b_idx += 1
@@ -1176,6 +1220,8 @@ def main() -> None:
             curr_pages.extend(sec_pages)
         if curr_pages:
             batches.append((f"{b_idx:02d}_body", curr_pages))
+        if boost_log:
+            print(f"Adaptive EN leading applied on {len(boost_log)} spreads (e.g., p.{boost_log[0][0]}: EN {boost_log[0][1]:.0f}px vs ZH {boost_log[0][2]:.0f}px -> lh={boost_log[0][3]})")
 
         batch_pdfs: list[Path] = []
         for bname, bpages in batches:
