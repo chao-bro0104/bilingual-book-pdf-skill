@@ -1065,11 +1065,12 @@ def render_section_pages(
         en_style = ""
         if zh_h - en_h > 16.0 and en_h > 120.0:
             max_ratio_by_lh = max_lh / base_lh
-            max_ratio_by_box = max(1.0, (max_h - 16.0) / en_h)
-            ratio = min(zh_h / en_h, max_ratio_by_lh, max_ratio_by_box)
+            max_ratio_by_box = max(1.0, (max_h - 24.0) / en_h)
+            raw_ratio = min(zh_h / en_h, max_ratio_by_lh, max_ratio_by_box)
+            ratio = 1.0 + (raw_ratio - 1.0) * 0.88
             if ratio > 1.015:
                 adj_lh = round(base_lh * ratio, 3)
-                adj_pb = round(base_pb * (1.0 + (ratio - 1.0) * 0.75), 2)
+                adj_pb = round(base_pb * (1.0 + (ratio - 1.0) * 0.70), 2)
                 en_style = f' style="--en-lh: {adj_lh}; --en-pb: {adj_pb}mm;"'
                 if boost_log is not None:
                     boost_log.append((pg, en_h, zh_h, adj_lh))
@@ -1228,6 +1229,22 @@ def main() -> None:
             doc_html = f"<!DOCTYPE html><html lang='en'><head><meta charset='utf-8'><style>{css}</style></head><body>{''.join(bpages)}</body></html>"
             page.set_content(doc_html, wait_until="load")
             page.evaluate("() => document.fonts.ready")
+            # Auto-heal any adaptive-leading page that slightly exceeds clientHeight
+            page.evaluate("""(baseLh) => {
+                for (const el of document.querySelectorAll('.page-body.col-en[style]')) {
+                    let guard = 0;
+                    while (el.scrollHeight - el.clientHeight > 1 && guard < 10) {
+                        const curr = parseFloat(el.style.getPropertyValue('--en-lh')) || baseLh;
+                        if (curr <= baseLh) {
+                            el.removeAttribute('style');
+                            break;
+                        }
+                        const nextLh = Math.max(baseLh, +(curr - 0.03).toFixed(3));
+                        el.style.setProperty('--en-lh', String(nextLh));
+                        guard++;
+                    }
+                }
+            }""", spec["en_lh_base"])
             overflows = page.evaluate("""() => {
                 return Array.from(document.querySelectorAll('.page-body'))
                     .map((el, i) => ({ index: i, overflow: el.scrollHeight - el.clientHeight }))
