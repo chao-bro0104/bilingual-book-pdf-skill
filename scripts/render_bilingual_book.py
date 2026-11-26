@@ -767,7 +767,7 @@ def build_measure_html(sections: list[dict], css: str) -> str:
 </style></head>
 <body>
   <div class="measure-stage">
-    <div id="measure-box" class="measure-box" style="height: inherit;"></div>
+    <div id="measure-box" class="measure-box"></div>
     <div id="col-en" class="col-en">{''.join(en_parts)}</div>
     <div id="col-zh" class="col-zh">{''.join(zh_parts)}</div>
   </div>
